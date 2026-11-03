@@ -1,0 +1,63 @@
+const {test}=require("node:test");
+const assert=require("node:assert/strict");
+const fs=require("node:fs");
+const ts=require("typescript");
+const moduleObject={exports:{}};
+new Function("exports",ts.transpileModule(fs.readFileSync("lib/domain.ts","utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText)(moduleObject.exports);
+const d=moduleObject.exports;
+const transaction=(overrides={})=>({id:"t1",name:"Кофе",amount:0.1,type:"expense",category:"Еда",date:"2026-10-15",impulse:false,version:0,...overrides});
+const backup=(overrides={})=>({tasks:[],notes:[],transactions:[],budget:120000,...overrides});
+test("money accepts comma decimals without floating point drift",()=>{assert.equal(d.parseMoney("12,34"),12.34);assert.equal(d.parseMoney("0.01"),0.01);assert.equal(d.parseMoney("999999999.99"),999999999.99);});
+test("money rejects negative, empty, exponent, excess precision and nonfinite inputs",()=>{for(const value of [0,-1,"",null,Infinity,NaN,"1e3","0.001","1000000000","12abc",true])assert.throws(()=>d.parseMoney(value));});
+test("calendar validates leap days and impossible dates",()=>{assert.equal(d.isISODate("2024-02-29"),true);for(const s of ["2025-02-29","2026-04-31","2026-13-01","2026-00-01","2026-01-00","2026-1-01"])assert.equal(d.isISODate(s),false);});
+test("local date uses local components",()=>{assert.equal(d.localDate(new Date(2026,0,2,0,1)),"2026-01-02");});
+
+test("dashboard uses the selected month, date ordering, open tasks and legacy note dates",()=>{
+  const task=(id,date,priority='Средний',done=false)=>({id,title:id,date,priority,done,version:0});
+  const data=backup({tasks:[task('no-date',''),task('today-low','2026-10-24','Низкий'),task('overdue','2026-10-23'),task('done','2026-10-22','Высокий',true),task('today-high','2026-10-24','Высокий')],transactions:[transaction({id:'old',date:'2026-10-01'}),transaction({id:'other',date:'2026-09-30'}),transaction({id:'new',date:'2026-10-24'})],notes:[{id:'old',date:'15.10.2026'},{id:'new',date:'2026-10-24'}]});
+  const result=d.dashboardData(data,'2026-10','2026-10-24');
+  assert.deepEqual(result.tasks.map(t=>t.id),['overdue','today-high','today-low','no-date']);
+  assert.deepEqual(result.transactions.map(t=>t.id),['new','old']);
+  assert.deepEqual(result.notes.map(n=>n.id),['new','old']);
+  assert.equal(d.dashboardData(data,'2027-01','2026-10-24').transactions.length,0);
+  assert.equal(data.transactions[0].id,'old','selection must not mutate workspace data');
+});
+
+test("recurring events stay visible after their original date and clamp month ends",()=>{
+  const event={id:'same-id',kind:'event',title:'Weekly',date:'2026-10-01',repeat:'weekly',version:0};
+  assert.equal(d.nextEventDate(event,'2026-10-24'),'2026-10-29');
+  assert.equal(d.nextEventDate(event,'2026-10-29'),'2026-10-29');
+  assert.equal(d.eventOccurs(event,'2026-10-29'),true);
+  assert.equal(d.eventOccurs(event,'2026-10-28'),false);
+  assert.equal(d.eventOccurs(event,'2026-09-24'),false);
+  const monthly={...event,date:'2024-01-31',repeat:'monthly'};
+  assert.equal(d.nextEventDate(monthly,'2024-02-01'),'2024-02-29');
+  assert.equal(d.nextEventDate(monthly,'2025-02-28'),'2025-02-28');
+  assert.equal(d.nextEventDate(monthly,'2025-03-01'),'2025-03-31');
+  assert.equal(d.nextEventDate({...monthly,date:'2026-12-31'},'2027-01-01'),'2027-01-31');
+  assert.equal(d.eventOccurs(monthly,'2025-02-28'),true);
+  assert.equal(d.eventOccurs(monthly,'2025-03-28'),false);
+  assert.equal(d.nextEventDate({...event,repeat:'none'},'2026-10-24'),null);
+  assert.equal(d.nextEventDate({...event,date:''},'2026-10-24'),null);
+  const data=backup({tasks:[{id:'same-id',title:'Task',date:'2026-10-29',done:false,priority:'Средний'}],extras:[event]});
+  const upcoming=d.dashboardData(data,'2026-10','2026-10-24').upcoming;
+  assert.equal(upcoming.length,2);
+  assert.equal(new Set(upcoming.map(item=>item.id)).size,2);
+});
+test("monthly totals exclude other months and years and sum cents",()=>{const result=d.summarizeMonth([transaction(),transaction({id:"2",amount:0.2,impulse:true}),transaction({id:"3",amount:1,type:"income"}),transaction({id:"4",amount:50,date:"2025-10-15"}),transaction({id:"5",amount:50,date:"2026-09-30"})],"2026-10");assert.deepEqual(result,{income:1,expense:0.3,balance:0.7,impulseTotal:0.2,categories:[{category:"Еда",amount:0.3}]});});
+test("legacy backup and version 3 wrapper both import",()=>{const legacy=backup({transactions:[transaction()]});const parsed=d.parseBackup(JSON.stringify(legacy));assert.equal(parsed.transactions.length,1);assert.deepEqual(d.parseBackup(d.createBackup(parsed)),parsed);});
+test("import resets versions and strips arbitrary extra fields",()=>{const parsed=d.parseBackup(JSON.stringify(backup({transactions:[transaction({version:42,user_id:"other",admin:true})]})));assert.equal(parsed.transactions[0].version,0);assert.equal("user_id" in parsed.transactions[0],false);});
+test("import rejects invalid types and forged transaction values",()=>{for(const patch of [{amount:"10"},{amount:-5},{date:"2026-02-30"},{impulse:"false"},{type:"transfer"},{type:"income",impulse:true}])assert.throws(()=>d.parseBackup(JSON.stringify(backup({transactions:[transaction(patch)]}))));});
+test("duplicate IDs within one entity are rejected",()=>{assert.throws(()=>d.parseBackup(JSON.stringify(backup({transactions:[transaction(),transaction()]}))));});
+test("legacy task dates may be empty and note dates may be localized",()=>{const result=d.parseBackup(JSON.stringify(backup({tasks:[{id:"a",title:"Task",done:false,priority:"Средний",date:""}],notes:[{id:"b",title:"Note",body:"",date:"15.10.2026"}]})));assert.equal(result.tasks[0].date,"");assert.equal(result.notes[0].date,"15.10.2026");});
+test("unsupported schema and malformed backups are rejected",()=>{for(const raw of ['{',"null","[]",JSON.stringify({schemaVersion:5,data:backup()}),JSON.stringify({tasks:[]}),JSON.stringify(backup({budget:0}))])assert.throws(()=>d.parseBackup(raw));});
+test("import enforces size and count limits",()=>{assert.throws(()=>d.parseBackup(" ".repeat(5*1024*1024+1)));assert.throws(()=>d.parseBackup(JSON.stringify(backup({transactions:Array.from({length:10001},(_,i)=>transaction({id:String(i)}))}))));});
+test("CSV protects formulas and quotes delimiters, quotes and multiline text",()=>{const csv=d.transactionsCSV([transaction({name:'=1+1',category:'A;"B"\nC'}),transaction({id:"2",name:"  @SUM(A1)"})]);assert.ok(csv.startsWith("\uFEFF"));assert.ok(csv.includes('"\'=1+1"'));assert.ok(csv.includes('"A;""B""\nC"'));assert.ok(csv.includes('"\'  @SUM(A1)"'));assert.ok(csv.includes('"0.10"'));});
+test("version 4 backup keeps planning and finance records while version 3 remains readable",()=>{
+ const extras=[{id:'account',kind:'account',title:'Kaspi',date:'2026-10-21',amount:0,version:4},{id:'wish',kind:'wish',title:'Наушники',date:'2026-10-21',amount:45000,status:'planned',note:'Полезно',version:2}];
+ const parsed=d.parseBackup(JSON.stringify({schemaVersion:4,data:backup({extras})}));
+ assert.equal(parsed.extras.length,2);assert.equal(parsed.extras[0].version,0);
+ assert.deepEqual(d.parseBackup(d.createBackup(parsed)),parsed);
+ assert.deepEqual(d.parseBackup(JSON.stringify({schemaVersion:3,data:backup()})).extras,[]);
+ assert.throws(()=>d.parseBackup(JSON.stringify(backup({extras:[extras[1],extras[1]]}))));
+});
