@@ -1,37 +1,69 @@
 # LifeHub
 
-A personal dashboard for tasks, notes, calendar planning and everyday finances.
+A personal workspace for tasks, notes, calendar planning and everyday finances, built with React and TypeScript.
 
-LifeHub combines a configurable Today view, recurring events, account balances, transfers, planned subscriptions and a wishlist in one responsive workspace. This is the React/TypeScript edition adapted for Cloudflare Workers and D1 through ChatGPT Sites.
+LifeHub brings daily planning and personal finance workflows into one responsive application. The current public source edition is adapted for Cloudflare Workers and D1 through ChatGPT Sites.
 
-## Features
+## Product capabilities
 
-- Tasks with dates, priorities and completion state; day, week and month calendar views.
+- Tasks with due dates, priorities and completion state.
+- Day, week and month calendar views, including recurring events.
 - Notes, income and expense tracking, monthly totals and budgets.
 - Account balances, transfers, planned subscriptions and a wishlist.
-- Light, dark, warm and system themes; configurable accent, font, density and dashboard layout.
-- JSON backup/import and CSV export, including validation and duplicate-import protection.
-- Owner-scoped storage and version checks to detect conflicting edits.
-- PWA assets and an offline connection screen. Private data is not cached for offline use.
+- Configurable themes, accent colors, typography, density and dashboard layout.
+- JSON backup/import and CSV export.
+- Progressive Web App assets and an offline connection screen.
 
-## Stack
+## Engineering highlights
+
+- **Owner-scoped data access:** server operations associate records with the active owner rather than trusting client-supplied ownership.
+- **Input validation:** imported backup data is checked before it is accepted.
+- **Conflict detection:** version checks identify stale edits instead of silently overwriting newer data.
+- **Safer exports:** CSV output accounts for spreadsheet formula injection.
+- **Regression tests:** automated tests cover domain rules, imports, owner isolation, stale updates and transport failures.
+
+## Technology
 
 React · TypeScript · Tailwind CSS · Vinext/Vite · Cloudflare Workers · D1 · Drizzle
 
-The earlier Supabase edition is separate. This edition uses D1, not PostgreSQL.
+The earlier Supabase edition is separate. This public edition uses Cloudflare D1, not PostgreSQL.
 
-## Local setup
+## Architecture
 
-Requirements: Node.js 22.13+ and npm. Node.js 24 is used by repository checks.
+```mermaid
+flowchart TD
+    UI[React UI] --> API[Application routes and session]
+    API --> DOMAIN[Domain validation and rules]
+    DOMAIN --> DATA[Owner-scoped data operations]
+    DATA --> DB[(Cloudflare D1)]
+    DB --> MIG[Drizzle schema and migrations]
+```
+
+Repository layout:
+
+| Directory | Responsibility |
+| --- | --- |
+| `app/` | Routes, application shell and session endpoint |
+| `components/`, `hooks/` | UI components and client state |
+| `lib/` | Domain rules, storage and server operations |
+| `db/`, `drizzle/` | D1 schema and migrations |
+| `tests/` | Domain, server and transport regression tests |
+| `build/`, `scripts/` | Sites/Workers integration and local tooling |
+
+## Run locally
+
+**Requirements:** Node.js 22.13+ and npm. The repository checks use Node.js 24.
 
 ```sh
 npm ci
 npm run dev
 ```
 
-Open `http://localhost:5173`. The starter provides a development-only sign-in identity. Local preview data stays on your machine. Data features require applying `drizzle/0000_thick_moonstone.sql` to the local `DB` binding using Wrangler and the generated Worker configuration. Always include `--local`; do not use your production database for tests.
+Open [http://localhost:5173](http://localhost:5173).
 
-## Checks
+The local preview provides a development-only sign-in identity. Data features require applying `drizzle/0000_thick_moonstone.sql` to the local `DB` binding with Wrangler and the generated Worker configuration. Use `--local`; do not point tests at a production database.
+
+## Automated checks
 
 ```sh
 node --test tests/*.test.cjs
@@ -39,23 +71,18 @@ npx tsc --noEmit
 npm run build
 ```
 
-The 25 automated checks cover money/date validation, recurring events, imports, owner isolation, stale updates and transport failures. They use isolated fixtures, not a live personal account.
+The repository currently documents 25 automated checks. Run the commands above against your checkout to verify its current state.
 
-## Architecture
+## Deployment and limitations
 
-| Directory | Purpose |
-| --- | --- |
-| `app/` | Routes, application shell and session endpoint |
-| `components/`, `hooks/` | Interface and client state |
-| `lib/` | Domain rules, storage and server operations |
-| `db/`, `drizzle/` | D1 schema and migrations |
-| `tests/` | Domain, server and transport regressions |
-| `build/`, `scripts/` | Sites/Workers integration and local tooling |
+The author's live deployment is private. This repository does not provide access to it and does not include personal records, credentials, backups or the original Site identity. To deploy your own instance, register a Site and configure its database and authentication.
 
-## Deployment and limits
+Known limitations:
 
-The author's live deployment is private. This source repository does not grant access to it or include personal records, credentials, backups, or the original Site identity. `.openai/hosting.json` retains only binding declarations. Register your own Site and configure its database and authentication before deploying.
+- Private data is not cached for offline use; there is no offline write queue.
+- Conflicting edits are detected but not automatically merged.
+- Subscriptions are reminders, not automatic charges.
+- Marking a wishlist item as bought does not create a financial transaction.
+- Physical iPhone installation and standalone authentication require device testing.
 
-Subscriptions are reminders, not automatic charges. Marking a wishlist item as bought does not create a financial transaction. There is no offline write queue or automatic merge of conflicting edits. Physical iPhone installation and standalone authentication require device testing.
-
-The historical `MIGRATION-AUDIT.md` is background, not a record of checks on this export. Third-party plugin and asset notices remain with their source files.
+This is a portfolio project, not a claim of a production deployment. Third-party plugin and asset notices remain with their source files.
